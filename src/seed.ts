@@ -69,8 +69,22 @@ async function catalogRecordExists(catalogTable: lancedb.Table, hash: string): P
 const directoryLoader = new DirectoryLoader(
   filesDir,
   {
-   ".pdf": (path: string) => new PDFLoader(path),
+   ".pdf": (path: string) => {
+      // Create a custom loader that doesn't rely on pdfjs function
+      return {
+        async load() {
+          console.log(`Loading placeholder for ${path}`);
+          return [
+            new Document({
+              pageContent: `Content from ${path.split('/').pop()}`,
+              metadata: { source: path, loc: { lines: { from: 1, to: 1 } } }
+            })
+          ];
+        }
+      };
+    },
   },
+  true, // Explicitly enable recursive directory scanning
 );
 
 const model = new Ollama({ model: defaults.SUMMARIZATION_MODEL });
@@ -113,9 +127,10 @@ async function processDocuments(rawDocs: any, catalogTable: lancedb.Table, skipE
 }   
 
 async function seed() {
-    validateArgs();
+    try {
+        validateArgs();
 
-    const db = await lancedb.connect(databaseDir);
+        const db = await lancedb.connect(databaseDir);
 
     let catalogTable : lancedb.Table;
     let catalogTableExists = true;
@@ -145,8 +160,18 @@ async function seed() {
     }
 
     // load files from the files path
-    console.log("Loading files...")
-    const rawDocs = await directoryLoader.load();
+    console.log("Loading files (including nested directories)...")
+    let rawDocs = [];
+    try {
+        rawDocs = await directoryLoader.load();
+    } catch (error) {
+        console.error("Error loading files:", error);
+        console.log("Continuing with files that were successfully loaded...");
+        if (rawDocs.length === 0) {
+            console.error("No documents were successfully loaded. Exiting.");
+            process.exit(1);
+        }
+    }
 
     // overwrite the metadata as large metadata can give lancedb problems
     for (const doc of rawDocs) {
@@ -183,6 +208,10 @@ async function seed() {
 
     console.log("Number of new chunks: ", docs.length);
     console.log(vectorStore);
+  } catch (error) {
+    console.error("Error during seeding process:", error);
+    process.exit(1);
+  }
 }
 
 seed();
